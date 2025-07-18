@@ -3,12 +3,13 @@ from dotenv import load_dotenv
 import os
 import asyncio
 from agents import AsyncOpenAI, OpenAIChatCompletionsModel, Agent, Runner, function_tool, RunConfig
-from ddgs import DDGS  # ✅ DuckDuckGo search tool
+from ddgs import DDGS
 from twilio.rest import Client
 
+# ✅ Load secrets
 load_dotenv()
 
-# ✅ Tool 1: User Data Filter
+# ✅ User database (static for now)
 @function_tool
 def get_user_data(min_age: int) -> list[dict]:
     "Retrieve user data based on a minimum age"
@@ -19,7 +20,7 @@ def get_user_data(min_age: int) -> list[dict]:
     ]
     return [user for user in users if user["age"] >= min_age]
 
-# ✅ Tool 2: DuckDuckGo Search
+# ✅ DuckDuckGo Search Tool
 @function_tool
 def search_duckduckgo(query: str) -> list[dict]:
     "Search the web using DuckDuckGo"
@@ -30,12 +31,15 @@ def search_duckduckgo(query: str) -> list[dict]:
             for r in results[:5]
         ]
 
-# ✅ WhatsApp sending function
+# ✅ WhatsApp sender
 def send_whatsapp_message(message: str):
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     from_whatsapp = os.getenv("TWILIO_WHATSAPP_NUMBER")
     to_whatsapp = os.getenv("MY_WHATSAPP_NUMBER")
+
+    if not all([account_sid, auth_token, from_whatsapp, to_whatsapp]):
+        raise Exception("❌ Twilio credentials missing or incomplete.")
 
     client = Client(account_sid, auth_token)
     client.messages.create(
@@ -44,8 +48,8 @@ def send_whatsapp_message(message: str):
         to=to_whatsapp
     )
 
-# ✅ Async agent runner
-async def run_agent_async(user_query):
+# ✅ Async runner
+async def run_agent_async(user_query: str):
     MODEL_NAME = "gemini-2.0-flash"
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -62,13 +66,13 @@ async def run_agent_async(user_query):
     config = RunConfig(
         model=model,
         model_provider=external_client,
-        tracing_disabled=True
+        tracing_disabled=False  # Enable to show reasoning steps
     )
 
     rishtey_wali_agent = Agent(
         name="Auntie",
         model=model,
-        instructions="You are a warm and wise 'Rishtey Wali Auntie' who helps people find matches.",
+        instructions="You are a warm and wise 'Rishtey Wali Auntie' who helps people find marriage matches in a caring, funny and auntie-style way.",
         tools=[get_user_data, search_duckduckgo]
     )
 
@@ -78,21 +82,59 @@ async def run_agent_async(user_query):
         run_config=config
     )
 
-    return result.final_output
+    return result
 
-# ✅ Streamlit UI
-st.title("🤖 Rishtey Wali Auntie - AI Matchmaker")
+# ==========================
+# ✅ Streamlit App UI
+# ==========================
 
-query = st.text_input("Enter your matchmaking request", 
-                      value="Find a match of 20 minimum age and tell me the details about the match from LinkedIn, Instagram, Facebook, Tiktok.")
+st.set_page_config(page_title="🤖 Rishtey Wali Auntie", layout="centered")
 
-if st.button("Find Match"):
-    with st.spinner("🔍 Searching..."):
+st.title("💍 Rishtey Wali Auntie – AI Matchmaker")
+st.markdown("Meet your personal rishta expert who finds matches and gives social media info in classic desi style.")
+
+with st.expander("🛠️ Customize your matchmaking"):
+    min_age = st.slider("Minimum Age", 18, 40, 20)
+    platforms = st.multiselect("Platforms to search:", ["LinkedIn", "Instagram", "Facebook", "TikTok"], default=["Instagram", "Facebook"])
+    custom_input = st.text_input("Custom request", 
+        value=f"Find a match of {min_age} minimum age and tell me the details from {', '.join(platforms)}.")
+
+    send_to_whatsapp = st.checkbox("📲 Send result to WhatsApp", value=True)
+    show_debug = st.checkbox("🐞 Show .env debug info")
+
+if st.button("🔍 Find Match"):
+    with st.spinner("Auntie is searching for rishta... 🕵️‍♀️"):
         try:
-            output = asyncio.run(run_agent_async(query))
-            st.success("🎯 Match Found!")
-            st.write(output)
-            send_whatsapp_message(output)
-            st.info("✅ Message sent to your WhatsApp.")
+            result = asyncio.run(run_agent_async(custom_input))
+
+            st.success("🎯 Rishta Found!")
+            st.subheader("💬 Auntie says:")
+            st.markdown(result.final_output)
+
+            # Optional: Show intermediate steps
+            if hasattr(result, 'steps'):
+                with st.expander("📜 Auntie's Reasoning"):
+                    for i, step in enumerate(result.steps):
+                        st.markdown(f"**Step {i+1}:** {step.input}")
+                        st.code(step.output)
+
+            if send_to_whatsapp:
+                send_whatsapp_message(result.final_output)
+                st.info("✅ Message sent to your WhatsApp.")
+
         except Exception as e:
-            st.error(f"❌ An error occurred: {e}")
+            st.error(f"❌ Error: {e}")
+
+# ==========================
+# 🐞 Debug Info
+# ==========================
+
+if show_debug:
+    st.markdown("### 🔐 Environment Debug Info")
+    st.code({
+        "TWILIO_ACCOUNT_SID": os.getenv("TWILIO_ACCOUNT_SID"),
+        "TWILIO_AUTH_TOKEN": "********",
+        "TWILIO_WHATSAPP_NUMBER": os.getenv("TWILIO_WHATSAPP_NUMBER"),
+        "MY_WHATSAPP_NUMBER": os.getenv("MY_WHATSAPP_NUMBER"),
+        "GEMINI_API_KEY": "********" if os.getenv("GEMINI_API_KEY") else None
+    })
